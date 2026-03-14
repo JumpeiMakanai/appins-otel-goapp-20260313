@@ -7,20 +7,22 @@ import (
 	"time"
 
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 
-	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
-
 	semconv "go.opentelemetry.io/otel/semconv/v1.21.0"
 )
 
-func InitTracer(ctx context.Context) (*sdktrace.TracerProvider, error) {
-	appName := getEnv("APP_NAME", "go-api")
+func InitTracer(ctx context.Context, serviceName string) (*sdktrace.TracerProvider, error) {
 	appVersion := getEnv("APP_VERSION", "1.0.0")
 	appEnv := getEnv("APP_ENV", "dev")
 	endpoint := getEnv("OTEL_EXPORTER_OTLP_ENDPOINT", "localhost:4319")
+
+	if serviceName == "" {
+		serviceName = getEnv("APP_NAME", "go-api")
+	}
 
 	exporter, err := otlptracegrpc.New(
 		ctx,
@@ -33,7 +35,7 @@ func InitTracer(ctx context.Context) (*sdktrace.TracerProvider, error) {
 
 	res := resource.NewWithAttributes(
 		semconv.SchemaURL,
-		semconv.ServiceName(appName),
+		semconv.ServiceName(serviceName),
 		semconv.ServiceVersion(appVersion),
 		semconv.DeploymentEnvironment(appEnv),
 	)
@@ -48,7 +50,6 @@ func InitTracer(ctx context.Context) (*sdktrace.TracerProvider, error) {
 
 	otel.SetTracerProvider(tp)
 
-	// TraceContext と Baggage を有効化
 	otel.SetTextMapPropagator(
 		propagation.NewCompositeTextMapPropagator(
 			propagation.TraceContext{},

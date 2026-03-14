@@ -20,7 +20,7 @@ import (
 func main() {
 	ctx := context.Background()
 
-	tp, err := telemetry.InitTracer(ctx)
+	tp, err := telemetry.InitTracer(ctx, "profile-service")
 	if err != nil {
 		log.Fatalf("failed to initialize tracer: %v", err)
 	}

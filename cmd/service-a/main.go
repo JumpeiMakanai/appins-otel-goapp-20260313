@@ -13,15 +13,24 @@ import (
 	"go-app/internal/telemetry"
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
 )
 
 func main() {
 	ctx := context.Background()
 
-	tp, err := telemetry.InitTracer(ctx)
+	tp, err := telemetry.InitTracer(ctx, "go-api")
 	if err != nil {
 		log.Fatalf("failed to initialize tracer: %v", err)
 	}
+
+	otel.SetTextMapPropagator(
+		propagation.NewCompositeTextMapPropagator(
+			propagation.TraceContext{},
+			propagation.Baggage{},
+		),
+	)
 
 	mux := http.NewServeMux()
 
