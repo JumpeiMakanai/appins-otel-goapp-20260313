@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql" // 追加
 	"encoding/json"
 	"log"
 	"net/http"
@@ -13,24 +14,40 @@ import (
 	"go-app/internal/telemetry"
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel"           // 追加
+	"go.opentelemetry.io/otel/attribute" // 追加
 )
 
-func main() {
-	ctx := context.Background()
+// グローバル変数として定義（newDBで初期化）
+var db *sql.DB
 
-	tp, err := telemetry.InitTracer(ctx, "profile-service")
+func main() {
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	// トレーサーの初期化
+	tp, err := telemetry.InitTracer(ctx, "go-logic")
 	if err != nil {
 		log.Fatalf("failed to initialize tracer: %v", err)
 	}
+	defer func() {
+		if err := tp.Shutdown(context.Background()); err != nil {
+			log.Printf("tracer shutdown error: %v", err)
+		}
+	}()
+
+	// MySQL データベース接続を初期化 (db.go で定義された newDB を呼び出す)
+	db, err = newDB(ctx)
+	if err != nil {
+		log.Fatalf("failed to connect DB: %v", err)
+	}
+	defer db.Close()
 
 	mux := http.NewServeMux()
 	mux.Handle("/healthz", otelhttp.NewHandler(http.HandlerFunc(healthHandler), "health_handler"))
 	mux.Handle("/profile", otelhttp.NewHandler(http.HandlerFunc(profileHandler), "profile_handler"))
 
 	port := getEnv("SERVER_PORT", "8081")
-
 	server := &http.Server{
 		Addr:    ":" + port,
 		Handler: mux,
@@ -39,61 +56,63 @@ func main() {
 	go func() {
 		log.Printf("profile service started on :%s", port)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatal(err)
+			log.Fatalf("server error: %v", err)
 		}
 	}()
 
-	waitForShutdown(server, tp)
-}
+	<-ctx.Done()
+	log.Println("shutting down server...")
 
-func healthHandler(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{
-		"status": "ok",
-	})
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		log.Printf("server shutdown error: %v", err)
+	}
 }
 
 func profileHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-
-	_ = simulateBusiness(ctx)
 
 	id := r.URL.Query().Get("id")
 	if id == "" {
 		id = "1"
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
-		"id":    1,
-		"name":  "taro",
-		"team":  "platform",
-		"rawId": id,
-	})
-}
-
-func simulateBusiness(ctx context.Context) error {
-	tracer := otel.Tracer("profile-service/internal/service")
-
-	_, span := tracer.Start(ctx, "load_profile")
+	// ビジネスロジック用スパンを開始
+	tracer := otel.Tracer("go-logic")
+	ctx, span := tracer.Start(ctx, "business_logic")
 	defer span.End()
+	span.SetAttributes(attribute.String("profile.id", id))
 
-	span.SetAttributes(
-		attribute.String("profile.source", "mock"),
-	)
+	// DB クエリ
+	var profile struct {
+		ID   int    `json:"id"`
+		Name string `json:"name"`
+		Team string `json:"team"`
+	}
 
-	time.Sleep(120 * time.Millisecond)
-	return nil
+	// db.go で otelsql を使ってラップされた db を使用
+	err := db.QueryRowContext(ctx,
+		"SELECT id, name, team FROM profiles WHERE id = ?", id).
+		Scan(&profile.ID, &profile.Name, &profile.Team)
+
+	if err != nil {
+		if err == sql.ErrNoRows {
+			http.Error(w, "profile not found", http.StatusNotFound)
+		} else {
+			span.RecordError(err)
+			http.Error(w, "internal server error", http.StatusInternalServerError)
+		}
+		return
+	}
+
+	writeJSON(w, http.StatusOK, profile)
 }
 
-func waitForShutdown(server *http.Server, tp interface{ Shutdown(context.Context) error }) {
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
+// --- 補助関数 (healthHandler, writeJSON, getEnv) は既存のまま ---
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	_ = server.Shutdown(ctx)
-	_ = tp.Shutdown(ctx)
+func healthHandler(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
 }
 
 func writeJSON(w http.ResponseWriter, status int, data any) {

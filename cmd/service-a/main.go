@@ -59,6 +59,21 @@ func main() {
 	waitForShutdown(server, tp)
 }
 
+// func withCORS(next http.Handler) http.Handler {
+// 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+// 		w.Header().Set("Access-Control-Allow-Origin", "https://YOUR_STATIC_SITE.z13.web.core.windows.net")
+// 		w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+// 		w.Header().Set("Access-Control-Allow-Headers", "traceparent, tracestate, content-type, request-id, request-context")
+
+// 		if r.Method == http.MethodOptions {
+// 			w.WriteHeader(http.StatusNoContent)
+// 			return
+// 		}
+
+// 		next.ServeHTTP(w, r)
+// 	})
+// }
+
 func waitForShutdown(server *http.Server, tp interface{ Shutdown(context.Context) error }) {
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
